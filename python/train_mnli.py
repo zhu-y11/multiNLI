@@ -12,6 +12,9 @@ from util import logger
 import util.parameters as params
 from util.data_processing import *
 from util.evaluate import *
+import json
+
+import pdb
 
 FIXED_PARAMETERS = params.load_parameters()
 modname = FIXED_PARAMETERS["model_name"]
@@ -25,7 +28,7 @@ MyModel = getattr(module, 'MyModel')
 
 # Logging parameter settings at each launch of training script
 # This will help ensure nothing goes awry in reloading a model and we consistently use the same hyperparameter settings. 
-logger.Log("FIXED_PARAMETERS\n %s" % FIXED_PARAMETERS)
+logger.Log("FIXED_PARAMETERS\n %s" % json.dumps(FIXED_PARAMETERS, indent = 4, sort_keys = True))
 
 
 ######################### LOAD DATA #############################
@@ -36,29 +39,35 @@ dev_snli = load_nli_data(FIXED_PARAMETERS["dev_snli"], snli=True)
 test_snli = load_nli_data(FIXED_PARAMETERS["test_snli"], snli=True)
 
 training_mnli = load_nli_data(FIXED_PARAMETERS["training_mnli"])
-dev_matched = load_nli_data(FIXED_PARAMETERS["dev_matched"])
-dev_mismatched = load_nli_data(FIXED_PARAMETERS["dev_mismatched"])
-test_matched = load_nli_data(FIXED_PARAMETERS["test_matched"])
-test_mismatched = load_nli_data(FIXED_PARAMETERS["test_mismatched"])
+dev_xnli = load_nli_data(FIXED_PARAMETERS["dev_xnli"])
+test_xnli = load_nli_data(FIXED_PARAMETERS["test_xnli"])
+train_gernes = list(set([item['genre'] for item in training_mnli]))
+train_gernes = dict(zip(train_gernes, [1] * len(train_gernes)))
 
-if 'temp.jsonl' in FIXED_PARAMETERS["test_matched"]:
-    # Removing temporary empty file that was created in parameters.py
-    os.remove(FIXED_PARAMETERS["test_matched"])
-    logger.Log("Created and removed empty file called temp.jsonl since test set is not available.")
+# select corresponding languages
+dev_xnli = [item for item in dev_xnli if item['language'] == FIXED_PARAMETERS['test_lang']]
+test_xnli = [item for item in test_xnli if item['language'] == FIXED_PARAMETERS['test_lang']]
+
+dev_xnli_matched = [item for item in dev_xnli if item['genre'] in train_gernes]
+dev_xnli_mismatched = [item for item in dev_xnli if item['genre'] not in train_gernes]
+assert(len(dev_xnli_matched) + len(dev_xnli_mismatched) == len(dev_xnli))
+test_xnli_matched = [item for item in test_xnli if item['genre'] in train_gernes]
+test_xnli_mismatched = [item for item in test_xnli if item['genre'] not in train_gernes]
+assert(len(test_xnli_matched) + len(test_xnli_mismatched) == len(test_xnli))
 
 dictpath = os.path.join(FIXED_PARAMETERS["log_path"], modname) + ".p"
 
 if not os.path.isfile(dictpath): 
     logger.Log("Building dictionary")
     if FIXED_PARAMETERS["alpha"] == 0:
-        word_indices = build_dictionary([training_mnli])
+        word_indices = build_dictionary([training_mnli, dev_xnli, test_xnli])
     else:
-        word_indices = build_dictionary([training_mnli, training_snli])
+        word_indices = build_dictionary([training_mnli, training_snli, dev_xnli, test_xnli])
     
     logger.Log("Padding and indexifying sentences")
     sentences_to_padded_index_sequences(word_indices, [training_mnli, training_snli, 
-                                        dev_matched, dev_mismatched, dev_snli, test_snli, 
-                                        test_matched, test_mismatched])
+                                                       dev_xnli_matched, dev_xnli_mismatched, dev_snli, 
+                                                       test_xnli_matched, test_xnli_mismatched, test_snli])
     pickle.dump(word_indices, open(dictpath, "wb"))
 
 else:
@@ -66,11 +75,11 @@ else:
     word_indices = pickle.load(open(dictpath, "rb"))
     logger.Log("Padding and indexifying sentences")
     sentences_to_padded_index_sequences(word_indices, [training_mnli, training_snli, 
-                                        dev_matched, dev_mismatched, dev_snli, 
-                                        test_snli, test_matched, test_mismatched])
+                                                       dev_xnli_matched, dev_xnli_mismatched, dev_snli, 
+                                                       test_xnli_matched, test_xnli_mismatched, test_snli])
 
 logger.Log("Loading embeddings")
-loaded_embeddings = loadEmbedding_rand(FIXED_PARAMETERS["embedding_data_path"], word_indices)
+loaded_embeddings = loadEmbedding_rand(FIXED_PARAMETERS["train_embedding_data_path"], FIXED_PARAMETERS["test_embedding_data_path"], word_indices)
 
 
 class modelClassifier:
@@ -107,8 +116,8 @@ class modelClassifier:
 
     def get_minibatch(self, dataset, start_index, end_index):
         indices = range(start_index, end_index)
-        premise_vectors = np.vstack([dataset[i]['sentence1_binary_parse_index_sequence'] for i in indices])
-        hypothesis_vectors = np.vstack([dataset[i]['sentence2_binary_parse_index_sequence'] for i in indices])
+        premise_vectors = np.vstack([dataset[i]['sentence1_index_sequence'] for i in indices])
+        hypothesis_vectors = np.vstack([dataset[i]['sentence2_index_sequence'] for i in indices])
         genres = [dataset[i]['genre'] for i in indices]
         labels = [dataset[i]['label'] for i in indices]
         return premise_vectors, hypothesis_vectors, labels, genres
@@ -181,7 +190,7 @@ class modelClassifier:
                 if self.step % self.display_step_freq == 0:
                     dev_acc_mat, dev_cost_mat = evaluate_classifier(self.classify, dev_mat, self.batch_size)
                     dev_acc_mismat, dev_cost_mismat = evaluate_classifier(self.classify, dev_mismat, self.batch_size)
-                    dev_acc_snli, dev_cost_snli = evaluate_classifier(self.classify, dev_snli, self.batch_size)
+                    #dev_acc_snli, dev_cost_snli = evaluate_classifier(self.classify, dev_snli, self.batch_size)
                     mtrain_acc, mtrain_cost = evaluate_classifier(self.classify, train_mnli[0:5000], self.batch_size)
 
                     if self.alpha != 0.:
@@ -193,12 +202,10 @@ class modelClassifier:
                             Dev-SNLI cost: %f\t MultiNLI train cost: %f\t SNLI train cost: %f" 
                             % (self.step, dev_cost_mat, dev_cost_mismat, dev_cost_snli, mtrain_cost, strain_cost))
                     else:
-                        logger.Log("Step: %i\t Dev-matched acc: %f\t Dev-mismatched acc: %f\t \
-                            Dev-SNLI acc: %f\t MultiNLI train acc: %f" %(self.step, dev_acc_mat, 
-                                dev_acc_mismat, dev_acc_snli, mtrain_acc))
-                        logger.Log("Step: %i\t Dev-matched cost: %f\t Dev-mismatched cost: %f\t \
-                            Dev-SNLI cost: %f\t MultiNLI train cost: %f" %(self.step, dev_cost_mat, 
-                                dev_cost_mismat, dev_cost_snli, mtrain_cost))
+                      dev_acc = (len(dev_mat) * dev_acc_mat + len(dev_mismat) * dev_acc_mismat) / (len(dev_mat) + len(dev_mismat))
+                      dev_cost = (len(dev_mat) * dev_cost_mat + len(dev_mismat) * dev_cost_mismat) / (len(dev_mat) + len(dev_mismat))
+                      logger.Log("Step: %i Dev-matched acc: %.4f Dev-mismatched acc: %.4f Dev acc: %.4f MultiNLI train acc: %.4f" %(self.step, dev_acc_mat, dev_acc_mismat, dev_acc, mtrain_acc))
+                      logger.Log("Step: %i Dev-matched cost: %.4f Dev-mismatched cost: %.4f Dev cost: %.4f MultiNLI train cost: %.4f" %(self.step, dev_cost_mat, dev_cost_mismat, dev_cost, mtrain_cost))
 
                 if self.step % 500 == 0:
                     self.saver.save(self.sess, ckpt_file)
@@ -303,26 +310,34 @@ test = params.train_or_test()
 print("ALL RESULTS ON TEST")
 
 if test == False:
-    classifier.train(training_mnli, training_snli, dev_matched, dev_mismatched, dev_snli)
-    logger.Log("Acc on matched multiNLI dev-set: %s" 
-        % (evaluate_classifier(classifier.classify, test_matched, FIXED_PARAMETERS["batch_size"]))[0])
-    logger.Log("Acc on mismatched multiNLI dev-set: %s" 
-        % (evaluate_classifier(classifier.classify, test_mismatched, FIXED_PARAMETERS["batch_size"]))[0])
+    classifier.train(training_mnli, training_snli, dev_xnli_matched, dev_xnli_mismatched, dev_snli)
+    mat_test_acc = evaluate_classifier(classifier.classify, test_xnli_matched, FIXED_PARAMETERS["batch_size"])[0]
+    mismat_test_acc = evaluate_classifier(classifier.classify, test_xnli_matched, FIXED_PARAMETERS["batch_size"])[0]
+    test_acc = evaluate_classifier(classifier.classify, test_xnli, FIXED_PARAMETERS["batch_size"])[0]
+    logger.Log("Acc on mat-XNLI test-set in language %s: %s" 
+        % (FIXED_PARAMETERS['test_lang'], mat_test_acc))
+    logger.Log("Acc on mismat-XNLI test-set in language %s: %s" 
+        % (FIXED_PARAMETERS['test_lang'], mismat_test_acc))
+    logger.Log("Acc on XNLI test-set in language %s: %s" 
+        % (FIXED_PARAMETERS['test_lang'], test_acc))
+    '''
     logger.Log("Acc on SNLI test-set: %s" 
         % (evaluate_classifier(classifier.classify, test_snli, FIXED_PARAMETERS["batch_size"]))[0])
+    '''
 else: 
     results, bylength = evaluate_final(classifier.restore, classifier.classify, 
-        [test_matched, test_mismatched, test_snli], FIXED_PARAMETERS["batch_size"])
-    logger.Log("Acc on multiNLI matched dev-set: %s" %(results[0]))
-    logger.Log("Acc on multiNLI mismatched dev-set: %s" %(results[1]))
-    logger.Log("Acc on SNLI test set: %s" %(results[2]))
+        [test_xnli_matched, test_xnli_mismatched], FIXED_PARAMETERS["batch_size"])
+    logger.Log("Acc on multiNLI matched test-set in language %s: %s" %(FIXED_PARAMETERS['test_lang'], results[0]))
+    logger.Log("Acc on multiNLI mismatched test-set in language %s: %s" %(FIXED_PARAMETERS['test_lang'], results[1]))
+    #logger.Log("Acc on SNLI test set: %s" %(results[2]))
     
     #dumppath = os.path.join("./", modname) + "_length.p"
     #pickle.dump(bylength, open(dumppath, "wb"))
-
+    '''
     # Results by genre,
     logger.Log("Acc on matched genre dev-sets: %s" 
         % (evaluate_classifier_genre(classifier.classify, test_matched, FIXED_PARAMETERS["batch_size"])[0]))
     logger.Log("Acc on mismatched genres dev-sets: %s" 
         % (evaluate_classifier_genre(classifier.classify, test_mismatched, FIXED_PARAMETERS["batch_size"])[0]))
+    '''
 

@@ -3,8 +3,10 @@ import re
 import random
 import json
 import collections
-import parameters as params
+import util.parameters as params
 import pickle
+
+import pdb
 
 FIXED_PARAMETERS = params.load_parameters()
 
@@ -59,7 +61,7 @@ def load_nli_data_genre(path, genre, snli=True):
     return data
 
 def tokenize(string):
-    string = re.sub(r'\(|\)', '', string)
+    string = re.sub(r'\(|\)', '', string).lower()
     return string.split()
 
 def build_dictionary(training_datasets):
@@ -69,8 +71,10 @@ def build_dictionary(training_datasets):
     word_counter = collections.Counter()
     for i, dataset in enumerate(training_datasets):
         for example in dataset:
-            word_counter.update(tokenize(example['sentence1_binary_parse']))
-            word_counter.update(tokenize(example['sentence2_binary_parse']))
+            sentence1 = example['sentence1_binary_parse'] if 'sentence1_binary_parse' in example else example['sentence1_tokenized']
+            sentence2 = example['sentence2_binary_parse'] if 'sentence2_binary_parse' in example else example['sentence2_tokenized']
+            word_counter.update(tokenize(sentence1))
+            word_counter.update(tokenize(sentence2))
         
     vocabulary = set([word for word in word_counter])
     vocabulary = list(vocabulary)
@@ -86,21 +90,42 @@ def sentences_to_padded_index_sequences(word_indices, datasets):
     """
     for i, dataset in enumerate(datasets):
         for example in dataset:
-            for sentence in ['sentence1_binary_parse', 'sentence2_binary_parse']:
-                example[sentence + '_index_sequence'] = np.zeros((FIXED_PARAMETERS["seq_length"]), dtype=np.int32)
+            if 'sentence1_binary_parse' in example.keys():
+              for sentence in ['sentence1_binary_parse', 'sentence2_binary_parse']:
+                  st = 'sentence1' if sentence == 'sentence1_binary_parse' else 'sentence2'
+                  example[st + '_index_sequence'] = np.zeros((FIXED_PARAMETERS["seq_length"]), dtype=np.int32)
+                  
+                  # lowercase and tokenization
+                  token_sequence = tokenize(example[sentence])
 
-                token_sequence = tokenize(example[sentence])
-                padding = FIXED_PARAMETERS["seq_length"] - len(token_sequence)
+                  for i in range(FIXED_PARAMETERS["seq_length"]):
+                      if i >= len(token_sequence):
+                          index = word_indices[PADDING]
+                      else:
+                          if token_sequence[i] in word_indices:
+                              index = word_indices[token_sequence[i]]
+                          else:
+                              index = word_indices[UNKNOWN]
+                      example[st + '_index_sequence'][i] = index
+            else:
+              for sentence in ['sentence1_tokenized', 'sentence2_tokenized']:
+                  st = 'sentence1' if sentence == 'sentence1_tokenized' else 'sentence2'
+                  example[st + '_index_sequence'] = np.zeros((FIXED_PARAMETERS["seq_length"]), dtype=np.int32)
+                  
+                  # lowercase and tokenization
+                  token_sequence = tokenize(example[sentence])
 
-                for i in range(FIXED_PARAMETERS["seq_length"]):
-                    if i >= len(token_sequence):
-                        index = word_indices[PADDING]
-                    else:
-                        if token_sequence[i] in word_indices:
-                            index = word_indices[token_sequence[i]]
-                        else:
-                            index = word_indices[UNKNOWN]
-                    example[sentence + '_index_sequence'][i] = index
+                  for i in range(FIXED_PARAMETERS["seq_length"]):
+                      if i >= len(token_sequence):
+                          index = word_indices[PADDING]
+                      else:
+                          if token_sequence[i] in word_indices:
+                              index = word_indices[token_sequence[i]]
+                          else:
+                              index = word_indices[UNKNOWN]
+                      example[st + '_index_sequence'][i] = index
+
+
 
 
 def loadEmbedding_zeros(path, word_indices):
@@ -122,9 +147,9 @@ def loadEmbedding_zeros(path, word_indices):
     return emb
 
 
-def loadEmbedding_rand(path, word_indices):
+def loadEmbedding_rand(train_path, test_path, word_indices):
     """
-    Load GloVe embeddings. Doing a random normal initialization for OOV words.
+    Load embeddings. Doing a random normal initialization for OOV words.
     """
     n = len(word_indices)
     m = FIXED_PARAMETERS["word_embedding_dim"]
@@ -133,17 +158,18 @@ def loadEmbedding_rand(path, word_indices):
     emb[:,:] = np.random.normal(size=(n,m))
 
     # Explicitly assign embedding of <PAD> to be zeros.
-    emb[0:2, :] = np.zeros((1,m), dtype="float32")
-    
-    with open(path, 'r') as f:
-        for i, line in enumerate(f):
-            if FIXED_PARAMETERS["embeddings_to_load"] != None:
-                if i >= FIXED_PARAMETERS["embeddings_to_load"]:
-                    break
-            
-            s = line.split()
-            if s[0] in word_indices:
-                emb[word_indices[s[0]], :] = np.asarray(s[1:])
+    emb[0:2, :] = np.zeros((1, m), dtype="float32")
+
+    for path in [train_path, test_path]:
+        with open(path, 'r') as f:
+            for i, line in enumerate(f):
+                if FIXED_PARAMETERS["embeddings_to_load"] != None:
+                    if i >= FIXED_PARAMETERS["embeddings_to_load"]:
+                        break
+                
+                s = line.split()
+                if s[0] in word_indices:
+                    emb[word_indices[s[0]], :] = np.asarray(s[1:])
 
     return emb
 
