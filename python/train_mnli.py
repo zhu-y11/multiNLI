@@ -16,6 +16,9 @@ import json
 
 import pdb
 
+random.seed(1234)
+tf.set_random_seed(1234)
+
 FIXED_PARAMETERS = params.load_parameters()
 modname = FIXED_PARAMETERS["model_name"]
 logpath = os.path.join(FIXED_PARAMETERS["log_path"], modname) + ".log"

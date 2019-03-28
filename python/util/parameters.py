@@ -37,8 +37,8 @@ parser.add_argument("--datapath", type=str, default="../data")
 parser.add_argument("--ckptpath", type=str, default="../logs")
 parser.add_argument("--logpath", type=str, default="../logs")
 
-parser.add_argument("--train_embpath", type=str, required = True)
-parser.add_argument("--test_embpath", type=str, required = True)
+parser.add_argument("--train_embpath", type=str, help='English embeddings for training', required = True)
+parser.add_argument("--test_embpath", type=str, help='Target language embeddings for test', required = True)
 parser.add_argument("--emb_to_load", type=int, default=None, help="Number of embeddings to load. If None, all embeddings are loaded.")
 
 parser.add_argument("--learning_rate", type=float, default=0.0004, help="Learning rate for model")
@@ -70,8 +70,8 @@ def load_parameters():
         "log_path": "{}".format(args.logpath),
         "ckpt_path":  "{}".format(args.ckptpath),
         "embeddings_to_load": args.emb_to_load,
-        "word_embedding_dim": 40,
-        "hidden_embedding_dim": 40,
+        "word_embedding_dim": 300,
+        "hidden_embedding_dim": 300,
         "seq_length": args.seq_length,
         "keep_rate": args.keep_rate, 
         "batch_size": 32,
@@ -85,4 +85,3 @@ def load_parameters():
 
 def train_or_test():
     return args.test
-

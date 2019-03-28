@@ -2,3 +2,4 @@ logs/
 data/
 *.swp
 *.pyc
+*.log
